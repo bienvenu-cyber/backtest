@@ -4,10 +4,9 @@ import numpy as np
 import datetime
 import backtrader as bt
 import matplotlib
-matplotlib.use('TkAgg')  # Try different backend
-pd.set_option('display.max_rows', None)
+matplotlib.use('Agg')  # Changed to Agg backend which is more stable
 
-def fetch_historical_data(crypto_symbol, currency="USD", limit=365):  # Increased to 1 year of data
+def fetch_historical_data(crypto_symbol, currency="USD", limit=365):
     base_url = "https://min-api.cryptocompare.com/data/v2/"
     endpoint = "histoday"
     url = f"{base_url}{endpoint}"
@@ -26,7 +25,7 @@ def fetch_historical_data(crypto_symbol, currency="USD", limit=365):  # Increase
         if data.get("Response") == "Success" and "Data" in data:
             prices = []
             for item in data["Data"]["Data"]:
-                if item["volumeto"] > 0:  # Filter out zero volume periods
+                if item["volumeto"] > 0:
                     prices.append({
                         "Date": datetime.datetime.fromtimestamp(item["time"]),
                         "Open": float(item["open"]),
@@ -50,15 +49,16 @@ def fetch_historical_data(crypto_symbol, currency="USD", limit=365):  # Increase
 class MyStrategy(bt.Strategy):
     params = (
         ('rsi_period', 14),
-        ('rsi_oversold', 35),    # Made less strict
-        ('rsi_overbought', 65),  # Made less strict
+        ('rsi_oversold', 40),     # Even less strict
+        ('rsi_overbought', 60),   # Even less strict
         ('stoch_period', 14),
-        ('stoch_oversold', 25),  # Made less strict
-        ('stoch_overbought', 75),# Made less strict
+        ('stoch_oversold', 30),   # Less strict
+        ('stoch_overbought', 70), # Less strict
         ('macd1', 12),
         ('macd2', 26),
         ('macdsig', 9),
-        ('required_score', 3),   # Reduced from 4 to 3
+        ('required_score', 2),    # Only require 2 conditions now
+        ('trail_percent', 0.02)   # 2% trailing stop
     )
 
     def log(self, txt, dt=None):
@@ -69,7 +69,7 @@ class MyStrategy(bt.Strategy):
         self.dataclose = self.datas[0].close
         self.order = None
         self.trades = 0
-        self.in_position = False
+        self.trailing_stop = None
         
         # Initialize indicators
         self.rsi = bt.indicators.RSI(
@@ -90,6 +90,9 @@ class MyStrategy(bt.Strategy):
         self.ema_long = bt.indicators.EMA(self.data, period=26)
         self.atr = bt.indicators.ATR(self.data)
         self.bollinger = bt.indicators.BollingerBands(self.data, period=20)
+        
+        # Track highest price since entry
+        self.highest_price = 0
 
     def notify_order(self, order):
         if order.status in [order.Submitted, order.Accepted]:
@@ -98,14 +101,11 @@ class MyStrategy(bt.Strategy):
         if order.status in [order.Completed]:
             if order.isbuy():
                 self.log(f'BUY EXECUTED, Price: {order.executed.price:.2f}, Cost: {order.executed.value:.2f}, Comm: {order.executed.comm:.2f}')
-                self.in_position = True
+                self.highest_price = order.executed.price
             else:
                 self.log(f'SELL EXECUTED, Price: {order.executed.price:.2f}, Cost: {order.executed.value:.2f}, Comm: {order.executed.comm:.2f}')
-                self.in_position = False
+                self.highest_price = 0
             self.trades += 1
-
-        elif order.status in [order.Canceled, order.Margin, order.Rejected]:
-            self.log('Order Canceled/Margin/Rejected')
 
         self.order = None
 
@@ -122,15 +122,9 @@ class MyStrategy(bt.Strategy):
                 self.log(f'RSI oversold: {self.rsi[0]:.2f}')
             
             # Stochastic oversold
-            if (self.stochastic.percK[0] < self.params.stoch_oversold and 
-                self.stochastic.percD[0] < self.params.stoch_oversold):
+            if (self.stochastic.percK[0] < self.params.stoch_oversold):
                 buy_score += 1
                 self.log(f'Stochastic oversold: K={self.stochastic.percK[0]:.2f}, D={self.stochastic.percD[0]:.2f}')
-            
-            # Price below lower Bollinger
-            if self.dataclose[0] <= self.bollinger.lines.bot[0]:
-                buy_score += 1
-                self.log('Price below lower Bollinger')
             
             # MACD crossing above signal
             if (self.macd.macd[-1] <= self.macd.signal[-1] and 
@@ -149,27 +143,30 @@ class MyStrategy(bt.Strategy):
                 self.order = self.buy()
 
         else:  # In the market
+            # Update trailing stop
+            if self.dataclose[0] > self.highest_price:
+                self.highest_price = self.dataclose[0]
+            
+            # Check if price has fallen below trailing stop
+            stop_price = self.highest_price * (1 - self.params.trail_percent)
+            if self.dataclose[0] < stop_price:
+                self.log(f'SELL CREATE (Trailing Stop), {self.dataclose[0]:.2f}')
+                self.order = self.sell()
+                return
+            
+            # Regular sell conditions
             sell_score = 0
             
-            # RSI overbought
             if self.rsi[0] > self.params.rsi_overbought:
                 sell_score += 1
             
-            # Stochastic overbought
-            if (self.stochastic.percK[0] > self.params.stoch_overbought and 
-                self.stochastic.percD[0] > self.params.stoch_overbought):
+            if (self.stochastic.percK[0] > self.params.stoch_overbought):
                 sell_score += 1
             
-            # Price above upper Bollinger
-            if self.dataclose[0] >= self.bollinger.lines.top[0]:
-                sell_score += 1
-            
-            # MACD crossing below signal
             if (self.macd.macd[-1] >= self.macd.signal[-1] and 
                 self.macd.macd[0] < self.macd.signal[0]):
                 sell_score += 1
             
-            # EMA cross
             if (self.ema_short[-1] >= self.ema_long[-1] and 
                 self.ema_short[0] < self.ema_long[0]):
                 sell_score += 1
@@ -181,29 +178,23 @@ class MyStrategy(bt.Strategy):
 def run_backtest():
     crypto_symbol = "BTC"
     print(f"Fetching data for {crypto_symbol}...")
-    data = fetch_historical_data(crypto_symbol, limit=365)  # Increased to 1 year
+    data = fetch_historical_data(crypto_symbol, limit=365)
     
     if data.empty:
         print("No data available for backtest.")
         return
 
     cerebro = bt.Cerebro()
+    cerebro.broker.setcommission(commission=0.001)  # 0.1% commission
     
-    # Add the data feed
     data_feed = bt.feeds.PandasData(dataname=data)
     cerebro.adddata(data_feed)
-
-    # Add strategy
     cerebro.addstrategy(MyStrategy)
-
-    # Set initial capital
+    
     initial_cash = 200
     cerebro.broker.set_cash(initial_cash)
+    cerebro.addsizer(bt.sizers.PercentSizer, percents=95)
 
-    # Add position sizer
-    cerebro.addsizer(bt.sizers.PercentSizer, percents=95)  # Use 95% of portfolio for each trade
-
-    # Add analyzers
     cerebro.addanalyzer(bt.analyzers.SharpeRatio, _name='sharpe')
     cerebro.addanalyzer(bt.analyzers.DrawDown, _name='drawdown')
     cerebro.addanalyzer(bt.analyzers.Returns, _name='returns')
@@ -215,17 +206,26 @@ def run_backtest():
         results = cerebro.run()
         strat = results[0]
         
+        # Get trade analysis
+        trade_analysis = strat.analyzers.trades.get_analysis()
+        
         final_value = cerebro.broker.getvalue()
         print(f'\nFinal Portfolio Value: ${final_value:.2f}')
         print(f'Total Return: {((final_value - initial_cash) / initial_cash * 100):.2f}%')
         print(f'Total Number of Trades: {strat.trades}')
         
-        # Try to plot without volume to avoid the array error
+        if strat.trades > 0:
+            try:
+                won = trade_analysis.won.total if hasattr(trade_analysis, 'won') else 0
+                lost = trade_analysis.lost.total if hasattr(trade_analysis, 'lost') else 0
+                print(f'Win Rate: {(won/(won+lost)*100 if (won+lost)>0 else 0):.1f}%')
+            except:
+                pass
+        
         try:
-            cerebro.plot(style='candlestick', barup='green', bardown='red', volume=False)
+            figure = cerebro.plot(style='candlestick', barup='green', bardown='red', volume=False)
         except Exception as e:
-            print(f"\nWarning: Could not generate plot: {str(e)}")
-            print("Consider using a different plotting backend or matplotlib version.")
+            print("\nNote: Unable to generate plot.")
             
     except Exception as e:
         print(f"Error during backtest execution: {str(e)}")
