@@ -1,5 +1,6 @@
 import requests
 import pandas as pd
+import numpy as np
 import datetime
 import backtrader as bt
 
@@ -98,7 +99,10 @@ def run_backtest():
         print("Aucune donnée disponible pour le backtest.")
         return
 
-    # Vérifier et nettoyer les données de volume
+    # Convertir les données en tableau NumPy
+    data_np = data.to_numpy()
+
+    # Vérifier et nettoyer les données de volume (convertir en numérique et supprimer les NaN)
     data['Volume'] = pd.to_numeric(data['Volume'], errors='coerce')
     data.dropna(subset=['Volume'], inplace=True)
 
