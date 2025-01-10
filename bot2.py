@@ -71,6 +71,9 @@ class MyStrategy(bt.Strategy):
 def run_backtest():
     # Charger les données historiques dans un DataFrame
     data = pd.read_csv('historical_data.csv', index_col='Date', parse_dates=True)
+    
+    # Afficher les premières lignes pour vérifier les données
+    print(data.head())
 
     # Créer un Feed de données pour Backtrader
     data_feed = bt.feeds.PandasData(dataname=data)
