@@ -1,8 +1,6 @@
 import pandas as pd
 import numpy as np
-import datetime
 import logging
-import talib
 import backtrader as bt
 
 # Configuration du logger
