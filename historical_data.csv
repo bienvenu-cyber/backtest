@@ -1,7 +1,6 @@
 import requests
 import pandas as pd
 import datetime
-
 def fetch_historical_data(crypto_symbol, currency="USD", limit=10):
     base_url = "https://min-api.cryptocompare.com/data/v2/"
     endpoint = "histoday"
@@ -10,7 +9,7 @@ def fetch_historical_data(crypto_symbol, currency="USD", limit=10):
         "fsym": crypto_symbol.upper(),
         "tsym": currency.upper(),
         "limit": limit,
-        "api_key": "votre_api_key"  # Remplacez par votre clé API
+        "api_key": "7f915fdfdf395420911c4e294f807d61a0a1b3ff10f0db14fd08b5e10c2da790"
     }
     response = requests.get(url, params=params)
     data = response.json()
