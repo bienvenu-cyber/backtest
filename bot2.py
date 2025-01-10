@@ -184,7 +184,6 @@ class MyStrategy(bt.Strategy):
                 self.log(f'SELL CREATE, {self.dataclose[0]:.2f}')
                 self.order = self.sell()
 
-
 def run_backtest():
     # Create output directory for plots
     output_dir = Path('backtest_results')
