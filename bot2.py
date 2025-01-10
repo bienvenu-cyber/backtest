@@ -98,6 +98,10 @@ def run_backtest():
         print("Aucune donnée disponible pour le backtest.")
         return
 
+    # Vérifier et nettoyer les données de volume
+    data['Volume'] = pd.to_numeric(data['Volume'], errors='coerce')
+    data.dropna(subset=['Volume'], inplace=True)
+
     data_feed = bt.feeds.PandasData(dataname=data)
 
     cerebro = bt.Cerebro()
