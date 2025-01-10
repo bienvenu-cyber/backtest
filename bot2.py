@@ -69,11 +69,16 @@ class MyStrategy(bt.Strategy):
 
 # Fonction de backtest
 def run_backtest():
-    # Charger les données historiques dans un DataFrame
-    data = pd.read_csv('historical_data.csv', index_col='Date', parse_dates=True)
+    # Charger les données historiques dans un DataFrame sans spécifier index_col
+    data = pd.read_csv('historical_data.csv')
     
     # Afficher les premières lignes pour vérifier les données
     print(data.head())
+
+    # Si la colonne 'Date' est présente, la définir comme index
+    if 'Date' in data.columns:
+        data.set_index('Date', inplace=True)
+        data.index = pd.to_datetime(data.index)
 
     # Créer un Feed de données pour Backtrader
     data_feed = bt.feeds.PandasData(dataname=data)
