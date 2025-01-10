@@ -1,6 +1,7 @@
 import requests
 import pandas as pd
 import datetime
+
 def fetch_historical_data(crypto_symbol, currency="USD", limit=10):
     base_url = "https://min-api.cryptocompare.com/data/v2/"
     endpoint = "histoday"
@@ -25,7 +26,9 @@ def fetch_historical_data(crypto_symbol, currency="USD", limit=10):
                 "Close": item["close"],
                 "Volume": item["volumeto"]
             })
-        return pd.DataFrame(prices)
+        df = pd.DataFrame(prices)
+        print(df.head())  # Afficher les premières lignes pour vérifier les données
+        return df
     else:
         print("Erreur de l'API:", data.get("Message"))
         return pd.DataFrame()
