@@ -1,0 +1,38 @@
+import requests
+import pandas as pd
+import datetime
+
+def fetch_historical_data(crypto_symbol, currency="USD", limit=10):
+    base_url = "https://min-api.cryptocompare.com/data/v2/"
+    endpoint = "histoday"
+    url = f"{base_url}{endpoint}"
+    params = {
+        "fsym": crypto_symbol.upper(),
+        "tsym": currency.upper(),
+        "limit": limit,
+        "api_key": "votre_api_key"  # Remplacez par votre clé API
+    }
+    response = requests.get(url, params=params)
+    data = response.json()
+
+    if data.get("Response") == "Success" and "Data" in data:
+        prices = []
+        for item in data["Data"]["Data"]:
+            prices.append({
+                "Date": datetime.datetime.fromtimestamp(item["time"]).strftime('%Y-%m-%d'),
+                "Open": item["open"],
+                "High": item["high"],
+                "Low": item["low"],
+                "Close": item["close"],
+                "Volume": item["volumeto"]
+            })
+        return pd.DataFrame(prices)
+    else:
+        print("Erreur de l'API:", data.get("Message"))
+        return pd.DataFrame()
+
+# Exemple d'utilisation
+crypto_symbol = "BTC"
+data = fetch_historical_data(crypto_symbol)
+data.to_csv("historical_data.csv", index=False)
+print("Données historiques enregistrées dans historical_data.csv")
