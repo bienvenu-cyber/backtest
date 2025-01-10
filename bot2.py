@@ -69,8 +69,8 @@ class MyStrategy(bt.Strategy):
 
 # Fonction de backtest
 def run_backtest():
-    # Charger les données historiques dans un DataFrame sans spécifier index_col
-    data = pd.read_csv('historical_data.csv')
+    # Charger les données historiques dans un DataFrame en ignorant les lignes incorrectes
+    data = pd.read_csv('historical_data.csv', on_bad_lines='warn')
     
     # Afficher les premières lignes pour vérifier les données
     print(data.head())
