@@ -4,7 +4,7 @@ import numpy as np
 import datetime
 import backtrader as bt
 import matplotlib
-matplotlib.use('TkAgg')  # Add this line to fix plotting issues
+matplotlib.use('TkAgg')
 
 def fetch_historical_data(crypto_symbol, currency="USD", limit=10):
     base_url = "https://min-api.cryptocompare.com/data/v2/"
@@ -19,7 +19,7 @@ def fetch_historical_data(crypto_symbol, currency="USD", limit=10):
     
     try:
         response = requests.get(url, params=params)
-        response.raise_for_status()  # Raise an exception for bad status codes
+        response.raise_for_status()
         data = response.json()
         
         if data.get("Response") == "Success" and "Data" in data:
@@ -27,7 +27,7 @@ def fetch_historical_data(crypto_symbol, currency="USD", limit=10):
             for item in data["Data"]["Data"]:
                 prices.append({
                     "Date": datetime.datetime.fromtimestamp(item["time"]),
-                    "Open": float(item["open"]),  # Ensure numeric values
+                    "Open": float(item["open"]),
                     "High": float(item["high"]),
                     "Low": float(item["low"]),
                     "Close": float(item["close"]),
@@ -53,9 +53,14 @@ class MyStrategy(bt.Strategy):
         ('macdsig', 9),
     )
 
+    def log(self, txt, dt=None):
+        dt = dt or self.datas[0].datetime.date(0)
+        print(f'{dt.isoformat()} {txt}')
+
     def __init__(self):
         self.dataclose = self.datas[0].close
         self.order = None
+        self.trades = 0
         
         # Initialize indicators
         self.rsi = bt.indicators.RSI(self.data.close, period=self.params.rsi_period)
@@ -72,6 +77,22 @@ class MyStrategy(bt.Strategy):
         self.bollinger = bt.indicators.BollingerBands(self.data)
         self.adx = bt.indicators.ADX(self.data)
         self.cci = bt.indicators.CCI(self.data)
+
+    def notify_order(self, order):
+        if order.status in [order.Submitted, order.Accepted]:
+            return
+
+        if order.status in [order.Completed]:
+            if order.isbuy():
+                self.log(f'BUY EXECUTED, Price: {order.executed.price:.2f}, Cost: {order.executed.value:.2f}, Comm: {order.executed.comm:.2f}')
+            else:
+                self.log(f'SELL EXECUTED, Price: {order.executed.price:.2f}, Cost: {order.executed.value:.2f}, Comm: {order.executed.comm:.2f}')
+            self.trades += 1
+
+        elif order.status in [order.Canceled, order.Margin, order.Rejected]:
+            self.log('Order Canceled/Margin/Rejected')
+
+        self.order = None
 
     def next(self):
         if self.order:
@@ -113,12 +134,15 @@ class MyStrategy(bt.Strategy):
             sell_score += 1
 
         if buy_score >= 4 and not self.position:
+            self.log(f'BUY CREATE, {self.dataclose[0]:.2f}')
             self.order = self.buy()
         elif sell_score >= 4 and self.position:
+            self.log(f'SELL CREATE, {self.dataclose[0]:.2f}')
             self.order = self.sell()
 
 def run_backtest():
     crypto_symbol = "BTC"
+    print(f"Fetching data for {crypto_symbol}...")
     data = fetch_historical_data(crypto_symbol, limit=100)
     
     if data.empty:
@@ -136,16 +160,17 @@ def run_backtest():
     cerebro.addstrategy(MyStrategy)
 
     # Set initial capital
-    initial_cash = 10000
+    initial_cash = 200
     cerebro.broker.set_cash(initial_cash)
 
     # Add position sizer
-    cerebro.addsizer(bt.sizers.FixedSize, stake=10)
+    cerebro.addsizer(bt.sizers.FixedSize, stake=0.1)  # Reduced position size
 
     # Add analyzers
     cerebro.addanalyzer(bt.analyzers.SharpeRatio, _name='sharpe')
     cerebro.addanalyzer(bt.analyzers.DrawDown, _name='drawdown')
     cerebro.addanalyzer(bt.analyzers.Returns, _name='returns')
+    cerebro.addanalyzer(bt.analyzers.TradeAnalyzer, _name='trades')
 
     print(f'Starting Portfolio Value: ${initial_cash:,.2f}')
 
@@ -153,18 +178,44 @@ def run_backtest():
     try:
         results = cerebro.run()
         strat = results[0]
+        
+        # Get trade analysis
+        trade_analysis = strat.analyzers.trades.get_analysis()
+        
+        # Print results
+        print(f'\nFinal Portfolio Value: ${cerebro.broker.getvalue():,.2f}')
+        print(f'Total Number of Trades: {strat.trades}')
+        
+        # Only print these if we have trades
+        if strat.trades > 0:
+            try:
+                sharpe = strat.analyzers.sharpe.get_analysis()['sharperatio']
+                if sharpe is not None:
+                    print(f'Sharpe Ratio: {sharpe:.2f}')
+            except:
+                print('Sharpe Ratio: N/A')
 
-        # Print analytics
-        print(f'Final Portfolio Value: ${cerebro.broker.getvalue():,.2f}')
-        print(f'Sharpe Ratio: {strat.analyzers.sharpe.get_analysis()["sharperatio"]:.2f}')
-        print(f'Max Drawdown: {strat.analyzers.drawdown.get_analysis()["max"]["drawdown"]:.2f}%')
-        print(f'Total Return: {strat.analyzers.returns.get_analysis()["rtot"]:.2f}%')
+            try:
+                drawdown = strat.analyzers.drawdown.get_analysis()['max']['drawdown']
+                print(f'Max Drawdown: {drawdown:.2f}%')
+            except:
+                print('Max Drawdown: N/A')
+
+            try:
+                returns = strat.analyzers.returns.get_analysis()['rtot']
+                print(f'Total Return: {returns*100:.2f}%')
+            except:
+                print('Total Return: N/A')
+
+        else:
+            print("\nNo trades were executed during the backtest period.")
+            print("Consider adjusting the strategy parameters or increasing the data period.")
 
         # Plot results
         try:
             cerebro.plot(style='candlestick', barup='green', bardown='red', volume=True)
         except Exception as e:
-            print(f"Warning: Could not generate plot: {str(e)}")
+            print(f"\nWarning: Could not generate plot: {str(e)}")
             print("Consider using a different plotting backend or matplotlib version.")
             
     except Exception as e:
