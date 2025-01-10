@@ -6,73 +6,29 @@ import backtrader as bt
 import os
 import matplotlib
 import matplotlib.pyplot as plt
-import seaborn as sns
 from pathlib import Path
 
 # Set environment variables and matplotlib configuration
 os.environ['MPLBACKEND'] = 'Agg'
-os.environ['PYTHONHASHSEED'] = '0'
 matplotlib.use('Agg')
-plt.style.use('seaborn')
 
 def fetch_historical_data(crypto_symbol, currency="USD", limit=365):
-    base_url = "https://min-api.cryptocompare.com/data/v2/"
-    endpoint = "histoday"
-    url = f"{base_url}{endpoint}"
-    params = {
-        "fsym": crypto_symbol.upper(),
-        "tsym": currency.upper(),
-        "limit": limit,
-        "api_key": "7f915fdfdf395420911c4e294f807d61a0a1b3ff10f0db14fd08b5e10c2da790"
-    }
-    
-    try:
-        response = requests.get(url, params=params)
-        response.raise_for_status()
-        data = response.json()
-        
-        if data.get("Response") == "Success" and "Data" in data:
-            prices = []
-            for item in data["Data"]["Data"]:
-                if item["volumeto"] > 0:
-                    prices.append({
-                        "Date": datetime.datetime.fromtimestamp(item["time"]),
-                        "Open": float(item["open"]),
-                        "High": float(item["high"]),
-                        "Low": float(item["low"]),
-                        "Close": float(item["close"]),
-                        "Volume": float(item["volumeto"])
-                    })
-            df = pd.DataFrame(prices)
-            df.set_index('Date', inplace=True)
-            print(f"Fetched {len(df)} days of data")
-            return df
-        else:
-            print(f"API Error: {data.get('Message')}")
-            return pd.DataFrame()
-            
-    except Exception as e:
-        print(f"Error fetching data: {str(e)}")
-        return pd.DataFrame()
+    # ... [keep existing fetch_historical_data function as is] ...
 
 class MyStrategy(bt.Strategy):
     params = (
         ('rsi_period', 14),
-        ('rsi_oversold', 40),     # Even less strict
-        ('rsi_overbought', 60),   # Even less strict
+        ('rsi_oversold', 40),
+        ('rsi_overbought', 60),
         ('stoch_period', 14),
-        ('stoch_oversold', 30),   # Less strict
-        ('stoch_overbought', 70), # Less strict
+        ('stoch_oversold', 30),
+        ('stoch_overbought', 70),
         ('macd1', 12),
         ('macd2', 26),
         ('macdsig', 9),
-        ('required_score', 2),    # Only require 2 conditions now
-        ('trail_percent', 0.02)   # 2% trailing stop
+        ('required_score', 2),
+        ('trail_percent', 0.02)
     )
-
-    def log(self, txt, dt=None):
-        dt = dt or self.datas[0].datetime.date(0)
-        print(f'{dt.isoformat()} {txt}')
 
     def __init__(self):
         self.dataclose = self.datas[0].close
@@ -100,8 +56,11 @@ class MyStrategy(bt.Strategy):
         self.atr = bt.indicators.ATR(self.data)
         self.bollinger = bt.indicators.BollingerBands(self.data, period=20)
         
-        # Track highest price since entry
         self.highest_price = 0
+
+    def log(self, txt, dt=None):
+        dt = dt or self.datas[0].datetime.date(0)
+        print(f'{dt.isoformat()} {txt}')
 
     def notify_order(self, order):
         if order.status in [order.Submitted, order.Accepted]:
@@ -122,26 +81,22 @@ class MyStrategy(bt.Strategy):
         if self.order:
             return
 
-        if not self.position:  # Not in the market
+        if not self.position:
             buy_score = 0
             
-            # RSI oversold
             if self.rsi[0] < self.params.rsi_oversold:
                 buy_score += 1
                 self.log(f'RSI oversold: {self.rsi[0]:.2f}')
             
-            # Stochastic oversold
             if (self.stochastic.percK[0] < self.params.stoch_oversold):
                 buy_score += 1
                 self.log(f'Stochastic oversold: K={self.stochastic.percK[0]:.2f}, D={self.stochastic.percD[0]:.2f}')
             
-            # MACD crossing above signal
             if (self.macd.macd[-1] <= self.macd.signal[-1] and 
                 self.macd.macd[0] > self.macd.signal[0]):
                 buy_score += 1
                 self.log('MACD crossing above signal')
             
-            # EMA cross
             if (self.ema_short[-1] <= self.ema_long[-1] and 
                 self.ema_short[0] > self.ema_long[0]):
                 buy_score += 1
@@ -151,19 +106,16 @@ class MyStrategy(bt.Strategy):
                 self.log(f'BUY CREATE, {self.dataclose[0]:.2f}')
                 self.order = self.buy()
 
-        else:  # In the market
-            # Update trailing stop
+        else:
             if self.dataclose[0] > self.highest_price:
                 self.highest_price = self.dataclose[0]
             
-            # Check if price has fallen below trailing stop
             stop_price = self.highest_price * (1 - self.params.trail_percent)
             if self.dataclose[0] < stop_price:
                 self.log(f'SELL CREATE (Trailing Stop), {self.dataclose[0]:.2f}')
                 self.order = self.sell()
                 return
             
-            # Regular sell conditions
             sell_score = 0
             
             if self.rsi[0] > self.params.rsi_overbought:
@@ -185,7 +137,6 @@ class MyStrategy(bt.Strategy):
                 self.order = self.sell()
 
 def run_backtest():
-    # Create output directory for plots
     output_dir = Path('backtest_results')
     output_dir.mkdir(exist_ok=True)
     
@@ -198,7 +149,7 @@ def run_backtest():
         return
 
     cerebro = bt.Cerebro()
-    cerebro.broker.setcommission(commission=0.001)  # 0.1% commission
+    cerebro.broker.setcommission(commission=0.001)
     
     data_feed = bt.feeds.PandasData(dataname=data)
     cerebro.adddata(data_feed)
@@ -219,7 +170,6 @@ def run_backtest():
         results = cerebro.run()
         strat = results[0]
         
-        # Get trade analysis
         trade_analysis = strat.analyzers.trades.get_analysis()
         
         final_value = cerebro.broker.getvalue()
@@ -235,41 +185,22 @@ def run_backtest():
             except:
                 pass
 
-        # New plotting code
         try:
-            # Set the figure size and DPI
-            plt.rcParams['figure.figsize'] = [15, 10]
-            plt.rcParams['figure.dpi'] = 300
+            # Simplified plotting code to address the ValueError
+            fig = cerebro.plot(style='candlestick',
+                             barup='green',
+                             bardown='red',
+                             volume=False,
+                             figsize=(15, 10))[0][0]
             
-            # Generate the plots
-            figs = cerebro.plot(style='candlestick',
-                              barup='green',
-                              bardown='red',
-                              volume=False,
-                              figsize=(15, 10))
-            
-            # Save each figure
-            for idx, fig in enumerate(figs):
-                for fidx, f in enumerate(fig):
-                    # Adjust layout
-                    f.tight_layout()
-                    
-                    # Save plot with timestamp
-                    timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
-                    filename = output_dir / f'backtest_plot_{timestamp}_{idx}_{fidx}.png'
-                    
-                    # Save with high quality settings
-                    f.savefig(
-                        filename,
-                        dpi=300,
-                        bbox_inches='tight',
-                        pad_inches=0.2,
-                        facecolor='white',
-                        edgecolor='none'
-                    )
-                    plt.close(f)  # Close the figure to free memory
-            
-            print(f"\nPlots saved successfully in {output_dir}/ directory")
+            # Save the plot
+            fig.savefig(
+                output_dir / 'backtest_plot.png',
+                dpi=300,
+                bbox_inches='tight'
+            )
+            plt.close(fig)
+            print(f"\nPlot saved successfully in {output_dir}/ directory")
             
         except Exception as e:
             print(f"\nNote: Unable to generate plot. Error: {str(e)}")
@@ -282,7 +213,6 @@ def run_backtest():
         traceback.print_exc()
     
     finally:
-        # Clean up matplotlib resources
         plt.close('all')
 
 if __name__ == "__main__":
