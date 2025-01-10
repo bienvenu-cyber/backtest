@@ -13,7 +13,44 @@ os.environ['MPLBACKEND'] = 'Agg'
 matplotlib.use('Agg')
 
 def fetch_historical_data(crypto_symbol, currency="USD", limit=365):
-    # ... [keep existing fetch_historical_data function as is] ...
+    base_url = "https://min-api.cryptocompare.com/data/v2/"
+    endpoint = "histoday"
+    url = f"{base_url}{endpoint}"
+    params = {
+        "fsym": crypto_symbol.upper(),
+        "tsym": currency.upper(),
+        "limit": limit,
+        "api_key": "7f915fdfdf395420911c4e294f807d61a0a1b3ff10f0db14fd08b5e10c2da790"
+    }
+    
+    try:
+        response = requests.get(url, params=params)
+        response.raise_for_status()
+        data = response.json()
+        
+        if data.get("Response") == "Success" and "Data" in data:
+            prices = []
+            for item in data["Data"]["Data"]:
+                if item["volumeto"] > 0:
+                    prices.append({
+                        "Date": datetime.datetime.fromtimestamp(item["time"]),
+                        "Open": float(item["open"]),
+                        "High": float(item["high"]),
+                        "Low": float(item["low"]),
+                        "Close": float(item["close"]),
+                        "Volume": float(item["volumeto"])
+                    })
+            df = pd.DataFrame(prices)
+            df.set_index('Date', inplace=True)
+            print(f"Fetched {len(df)} days of data")
+            return df
+        else:
+            print(f"API Error: {data.get('Message')}")
+            return pd.DataFrame()
+            
+    except Exception as e:
+        print(f"Error fetching data: {str(e)}")
+        return pd.DataFrame()
 
 class MyStrategy(bt.Strategy):
     params = (
@@ -186,7 +223,7 @@ def run_backtest():
                 pass
 
         try:
-            # Simplified plotting code to address the ValueError
+            # Simplified plotting code
             fig = cerebro.plot(style='candlestick',
                              barup='green',
                              bardown='red',
