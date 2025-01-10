@@ -4,9 +4,10 @@ import numpy as np
 import datetime
 import backtrader as bt
 import matplotlib
-matplotlib.use('TkAgg')
+matplotlib.use('TkAgg')  # Try different backend
+pd.set_option('display.max_rows', None)
 
-def fetch_historical_data(crypto_symbol, currency="USD", limit=10):
+def fetch_historical_data(crypto_symbol, currency="USD", limit=365):  # Increased to 1 year of data
     base_url = "https://min-api.cryptocompare.com/data/v2/"
     endpoint = "histoday"
     url = f"{base_url}{endpoint}"
@@ -25,16 +26,18 @@ def fetch_historical_data(crypto_symbol, currency="USD", limit=10):
         if data.get("Response") == "Success" and "Data" in data:
             prices = []
             for item in data["Data"]["Data"]:
-                prices.append({
-                    "Date": datetime.datetime.fromtimestamp(item["time"]),
-                    "Open": float(item["open"]),
-                    "High": float(item["high"]),
-                    "Low": float(item["low"]),
-                    "Close": float(item["close"]),
-                    "Volume": float(item["volumeto"])
-                })
+                if item["volumeto"] > 0:  # Filter out zero volume periods
+                    prices.append({
+                        "Date": datetime.datetime.fromtimestamp(item["time"]),
+                        "Open": float(item["open"]),
+                        "High": float(item["high"]),
+                        "Low": float(item["low"]),
+                        "Close": float(item["close"]),
+                        "Volume": float(item["volumeto"])
+                    })
             df = pd.DataFrame(prices)
             df.set_index('Date', inplace=True)
+            print(f"Fetched {len(df)} days of data")
             return df
         else:
             print(f"API Error: {data.get('Message')}")
@@ -47,10 +50,15 @@ def fetch_historical_data(crypto_symbol, currency="USD", limit=10):
 class MyStrategy(bt.Strategy):
     params = (
         ('rsi_period', 14),
+        ('rsi_oversold', 35),    # Made less strict
+        ('rsi_overbought', 65),  # Made less strict
         ('stoch_period', 14),
+        ('stoch_oversold', 25),  # Made less strict
+        ('stoch_overbought', 75),# Made less strict
         ('macd1', 12),
         ('macd2', 26),
         ('macdsig', 9),
+        ('required_score', 3),   # Reduced from 4 to 3
     )
 
     def log(self, txt, dt=None):
@@ -61,10 +69,17 @@ class MyStrategy(bt.Strategy):
         self.dataclose = self.datas[0].close
         self.order = None
         self.trades = 0
+        self.in_position = False
         
         # Initialize indicators
-        self.rsi = bt.indicators.RSI(self.data.close, period=self.params.rsi_period)
-        self.stochastic = bt.indicators.Stochastic(self.data, period=self.params.stoch_period)
+        self.rsi = bt.indicators.RSI(
+            self.data.close, 
+            period=self.params.rsi_period
+        )
+        self.stochastic = bt.indicators.Stochastic(
+            self.data,
+            period=self.params.stoch_period
+        )
         self.macd = bt.indicators.MACD(
             self.data, 
             period_me1=self.params.macd1,
@@ -74,9 +89,7 @@ class MyStrategy(bt.Strategy):
         self.ema_short = bt.indicators.EMA(self.data, period=12)
         self.ema_long = bt.indicators.EMA(self.data, period=26)
         self.atr = bt.indicators.ATR(self.data)
-        self.bollinger = bt.indicators.BollingerBands(self.data)
-        self.adx = bt.indicators.ADX(self.data)
-        self.cci = bt.indicators.CCI(self.data)
+        self.bollinger = bt.indicators.BollingerBands(self.data, period=20)
 
     def notify_order(self, order):
         if order.status in [order.Submitted, order.Accepted]:
@@ -85,8 +98,10 @@ class MyStrategy(bt.Strategy):
         if order.status in [order.Completed]:
             if order.isbuy():
                 self.log(f'BUY EXECUTED, Price: {order.executed.price:.2f}, Cost: {order.executed.value:.2f}, Comm: {order.executed.comm:.2f}')
+                self.in_position = True
             else:
                 self.log(f'SELL EXECUTED, Price: {order.executed.price:.2f}, Cost: {order.executed.value:.2f}, Comm: {order.executed.comm:.2f}')
+                self.in_position = False
             self.trades += 1
 
         elif order.status in [order.Canceled, order.Margin, order.Rejected]:
@@ -98,60 +113,82 @@ class MyStrategy(bt.Strategy):
         if self.order:
             return
 
-        buy_score = 0
-        sell_score = 0
+        if not self.position:  # Not in the market
+            buy_score = 0
+            
+            # RSI oversold
+            if self.rsi[0] < self.params.rsi_oversold:
+                buy_score += 1
+                self.log(f'RSI oversold: {self.rsi[0]:.2f}')
+            
+            # Stochastic oversold
+            if (self.stochastic.percK[0] < self.params.stoch_oversold and 
+                self.stochastic.percD[0] < self.params.stoch_oversold):
+                buy_score += 1
+                self.log(f'Stochastic oversold: K={self.stochastic.percK[0]:.2f}, D={self.stochastic.percD[0]:.2f}')
+            
+            # Price below lower Bollinger
+            if self.dataclose[0] <= self.bollinger.lines.bot[0]:
+                buy_score += 1
+                self.log('Price below lower Bollinger')
+            
+            # MACD crossing above signal
+            if (self.macd.macd[-1] <= self.macd.signal[-1] and 
+                self.macd.macd[0] > self.macd.signal[0]):
+                buy_score += 1
+                self.log('MACD crossing above signal')
+            
+            # EMA cross
+            if (self.ema_short[-1] <= self.ema_long[-1] and 
+                self.ema_short[0] > self.ema_long[0]):
+                buy_score += 1
+                self.log('EMA short crossing above long')
 
-        # Buy conditions
-        if self.rsi[0] < 30:
-            buy_score += 1
-        if self.stochastic.percK[0] < 20 and self.stochastic.percD[0] < 20:
-            buy_score += 1
-        if self.dataclose[0] <= self.bollinger.lines.bot[0]:
-            buy_score += 1
-        if self.cci[0] < -100:
-            buy_score += 1
-        if self.macd.macd[0] > self.macd.signal[0]:
-            buy_score += 1
-        if self.ema_short[0] > self.ema_long[0]:
-            buy_score += 1
-        if self.adx[0] > 25:
-            buy_score += 1
+            if buy_score >= self.params.required_score:
+                self.log(f'BUY CREATE, {self.dataclose[0]:.2f}')
+                self.order = self.buy()
 
-        # Sell conditions
-        if self.rsi[0] > 70:
-            sell_score += 1
-        if self.stochastic.percK[0] > 80 and self.stochastic.percD[0] > 80:
-            sell_score += 1
-        if self.dataclose[0] >= self.bollinger.lines.top[0]:
-            sell_score += 1
-        if self.cci[0] > 100:
-            sell_score += 1
-        if self.macd.macd[0] < self.macd.signal[0]:
-            sell_score += 1
-        if self.ema_short[0] < self.ema_long[0]:
-            sell_score += 1
-        if self.adx[0] > 25:
-            sell_score += 1
+        else:  # In the market
+            sell_score = 0
+            
+            # RSI overbought
+            if self.rsi[0] > self.params.rsi_overbought:
+                sell_score += 1
+            
+            # Stochastic overbought
+            if (self.stochastic.percK[0] > self.params.stoch_overbought and 
+                self.stochastic.percD[0] > self.params.stoch_overbought):
+                sell_score += 1
+            
+            # Price above upper Bollinger
+            if self.dataclose[0] >= self.bollinger.lines.top[0]:
+                sell_score += 1
+            
+            # MACD crossing below signal
+            if (self.macd.macd[-1] >= self.macd.signal[-1] and 
+                self.macd.macd[0] < self.macd.signal[0]):
+                sell_score += 1
+            
+            # EMA cross
+            if (self.ema_short[-1] >= self.ema_long[-1] and 
+                self.ema_short[0] < self.ema_long[0]):
+                sell_score += 1
 
-        if buy_score >= 4 and not self.position:
-            self.log(f'BUY CREATE, {self.dataclose[0]:.2f}')
-            self.order = self.buy()
-        elif sell_score >= 4 and self.position:
-            self.log(f'SELL CREATE, {self.dataclose[0]:.2f}')
-            self.order = self.sell()
+            if sell_score >= self.params.required_score:
+                self.log(f'SELL CREATE, {self.dataclose[0]:.2f}')
+                self.order = self.sell()
 
 def run_backtest():
     crypto_symbol = "BTC"
     print(f"Fetching data for {crypto_symbol}...")
-    data = fetch_historical_data(crypto_symbol, limit=100)
+    data = fetch_historical_data(crypto_symbol, limit=365)  # Increased to 1 year
     
     if data.empty:
         print("No data available for backtest.")
         return
 
-    # Create a cerebro instance
     cerebro = bt.Cerebro()
-
+    
     # Add the data feed
     data_feed = bt.feeds.PandasData(dataname=data)
     cerebro.adddata(data_feed)
@@ -164,7 +201,7 @@ def run_backtest():
     cerebro.broker.set_cash(initial_cash)
 
     # Add position sizer
-    cerebro.addsizer(bt.sizers.FixedSize, stake=0.1)  # Reduced position size
+    cerebro.addsizer(bt.sizers.PercentSizer, percents=95)  # Use 95% of portfolio for each trade
 
     # Add analyzers
     cerebro.addanalyzer(bt.analyzers.SharpeRatio, _name='sharpe')
@@ -172,48 +209,20 @@ def run_backtest():
     cerebro.addanalyzer(bt.analyzers.Returns, _name='returns')
     cerebro.addanalyzer(bt.analyzers.TradeAnalyzer, _name='trades')
 
-    print(f'Starting Portfolio Value: ${initial_cash:,.2f}')
+    print(f'Starting Portfolio Value: ${initial_cash:.2f}')
 
-    # Run the backtest
     try:
         results = cerebro.run()
         strat = results[0]
         
-        # Get trade analysis
-        trade_analysis = strat.analyzers.trades.get_analysis()
-        
-        # Print results
-        print(f'\nFinal Portfolio Value: ${cerebro.broker.getvalue():,.2f}')
+        final_value = cerebro.broker.getvalue()
+        print(f'\nFinal Portfolio Value: ${final_value:.2f}')
+        print(f'Total Return: {((final_value - initial_cash) / initial_cash * 100):.2f}%')
         print(f'Total Number of Trades: {strat.trades}')
         
-        # Only print these if we have trades
-        if strat.trades > 0:
-            try:
-                sharpe = strat.analyzers.sharpe.get_analysis()['sharperatio']
-                if sharpe is not None:
-                    print(f'Sharpe Ratio: {sharpe:.2f}')
-            except:
-                print('Sharpe Ratio: N/A')
-
-            try:
-                drawdown = strat.analyzers.drawdown.get_analysis()['max']['drawdown']
-                print(f'Max Drawdown: {drawdown:.2f}%')
-            except:
-                print('Max Drawdown: N/A')
-
-            try:
-                returns = strat.analyzers.returns.get_analysis()['rtot']
-                print(f'Total Return: {returns*100:.2f}%')
-            except:
-                print('Total Return: N/A')
-
-        else:
-            print("\nNo trades were executed during the backtest period.")
-            print("Consider adjusting the strategy parameters or increasing the data period.")
-
-        # Plot results
+        # Try to plot without volume to avoid the array error
         try:
-            cerebro.plot(style='candlestick', barup='green', bardown='red', volume=True)
+            cerebro.plot(style='candlestick', barup='green', bardown='red', volume=False)
         except Exception as e:
             print(f"\nWarning: Could not generate plot: {str(e)}")
             print("Consider using a different plotting backend or matplotlib version.")
